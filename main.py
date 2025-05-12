@@ -1,21 +1,16 @@
 import sys
-sys.path.append("keepalive.py")
 import nextcord
 from nextcord.ext import commands, tasks
 from datetime import datetime, timedelta
 import asyncio
-from keepalive import keep_alive
 import os
 from dotenv import load_dotenv
-
-
-keep_alive()
 
 # Bot setup
 intents = nextcord.Intents.default()
 intents.messages = True
 intents.reactions = True
-intents.message_content = True
+intents.message_content = True  
 intents.guilds = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
