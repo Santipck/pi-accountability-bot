@@ -20,7 +20,7 @@ VERIFICATION_CHANNEL = "photo-verification"  # Replace with your channel name
 LOGGING_CHANNEL = "punishment-incentive"  # Replace with your channel name
 MEETING_INTERVAL_DAYS = 14  # Bi-weekly meetings
 
-# Stores goal logs in memory (replace with a database for persistence)
+# Stores goal logs in memory replace with database
 goal_logs = {}
 
 # Tracks which messages have been logged
@@ -108,6 +108,14 @@ async def reset(ctx):
 async def reset_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ You don't have permission to use this command.")
+
+# find better way to !log 
+
+# heatmap/autologging visually
+
+# streaking
+
+# punishment/incentive timer
 
 
 # Run the bot
