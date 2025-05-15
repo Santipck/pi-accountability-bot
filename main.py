@@ -5,6 +5,16 @@ from datetime import datetime, timedelta
 import asyncio
 import os
 from dotenv import load_dotenv
+import json 
+
+#
+import pandas as pd
+import calmap
+import io
+import matplotlib.pyplot as plt 
+
+
+
 
 # Bot setup
 intents = nextcord.Intents.default()
@@ -20,17 +30,52 @@ VERIFICATION_CHANNEL = "photo-verification"  # Replace with your channel name
 LOGGING_CHANNEL = "punishment-incentive"  # Replace with your channel name
 MEETING_INTERVAL_DAYS = 14  # Bi-weekly meetings
 
-# Stores goal logs in memory replace with database
-goal_logs = {}
-
-# Tracks which messages have been logged
-logged_messages = set()  # Use message IDs to track completed logs
-
 # Bot Events
 @bot.event
 async def on_ready():
+    load_goal_logs()
+    load_user_goals()
     print(f"Logged in as {bot.user}!")
 
+
+# Stores goal logs in memory, replacing with database...
+LOG_FILE = "goal_logs.json"
+
+# Setting Goals
+
+@bot.command()
+async def setgoal(ctx, *, goal_text: str):
+    user_goals[str(ctx.author.id)] = goal_text
+    save_user_goals()
+    await ctx.send(f"✅ {ctx.author.mention}, your goal has been set to:\n> **{goal_text}**")
+
+# Yours or others
+
+@bot.command()
+async def goal(ctx, member: nextcord.Member = None):
+    member = member or ctx.author
+    goal = user_goals.get(str(member.id))
+    if goal:
+        await ctx.send(f"🎯 **{member.display_name}'s goal:**\n> {goal}")
+    else:
+        await ctx.send(f"⚠️ WARNING {member.display_name} has not set a goal yet. :O")
+
+
+def load_goal_logs():
+    global goal_logs
+    try:
+        with open(LOG_FILE, "r") as f:
+            goal_logs = json.load(f)
+            # Convert datetime strings if needed later
+    except FileNotFoundError:
+        goal_logs = {}
+
+def save_goal_logs():
+    with open(LOG_FILE, "w") as f:
+        json.dump(goal_logs, f)
+
+# Tracks which messages have been logged
+logged_messages = set()  # Use message IDs to track completed logs
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -66,6 +111,8 @@ async def on_raw_reaction_add(payload):
                     goal_logs[user.id]["logs"].append(log_entry)
                     goal_logs[user.id]["count"] += 1
 
+                    save_goal_logs()
+
                     # Post in the logging channel
                     await log_channel.send(f"{log_entry} (Total completions: {goal_logs[user.id]['count']})")
                     return
@@ -84,30 +131,56 @@ async def logs(ctx, member: nextcord.Member = None):
 
     logs = user_data["logs"]
     count = user_data["count"]
-    log_message = (
-        f"📜 **Logs for {member.mention}:**\n"
-        + "\n".join(logs)
-        + f"\n\n**Total Completions:** {count}"
+
+    timestamps = []
+    for entry in logs:
+        try:
+            time_str = entry.split("on ")[1]
+            timestamps.append(datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            continue
+
+    heatmap_image = generate_heatmap_image(timestamps)
+
+    if heatmap_image:
+        file = nextcord.File(heatmap_image, filename="heatmap.png")
+        await ctx.send(
+            content=f"📜 **Logs for {member.mention}:**\n**Total Completions:** {count}",
+            file=file
+        )
+    else:
+        await ctx.send(f"📜 Logs for {member.mention}, but no valid timestamps found.")
+
+
+# HEAT
+
+def generate_heatmap_image(timestamps):
+    if not timestamps:
+        return None
+
+    # Set default font
+    plt.rcParams['font.family'] = 'DejaVu Sans'
+
+    # Create a Series
+    date_series = pd.Series(1, index=pd.to_datetime(timestamps))
+
+    fig, ax = calmap.calendarplot(
+        date_series,
+        cmap='Greens',
+        fillcolor='lightgray',
+        linewidth=0.5,
+        fig_kws=dict(figsize=(16, 4))
     )
-    await ctx.send(log_message)
 
-# Command to clear goal logs and logged messages
-@bot.command()
-@commands.has_permissions(administrator=True)  # Optional: Restrict this command to admins
-async def reset(ctx):
-    global goal_logs, logged_messages
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
 
-    # Clear the dictionaries and sets
-    goal_logs.clear()
-    logged_messages.clear()
-
-    await ctx.send("✅ All logged goals and messages have been reset. You can now retest.")
-
-# Optional: Error handling for missing permissions
-@reset.error
-async def reset_error(ctx, error):
-    if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ You don't have permission to use this command.")
+@bot.command(hidden=True)
+async def cayden(ctx): #timeless classic
+    await ctx.send("https://cdn.discordapp.com/attachments/1278741106309468242/1372644177065676911/rr.mp4?ex=68278602&is=68263482&hm=a39ab968204763c86fdd8c67e6e359d41dfb5fca983c83e7ee80dd5be704ab22&")
 
 # find better way to !log 
 
