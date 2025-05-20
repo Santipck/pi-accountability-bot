@@ -26,14 +26,18 @@ intents.guilds = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Configuration
-VERIFICATION_CHANNEL = "photo-verification"  # Replace with your channel name
-LOGGING_CHANNEL = "punishment-incentive"  # Replace with your channel name
+VERIFICATION_CHANNEL = "photo-verification"  # Replace with given channel name for verifying goals
+LOGGING_CHANNEL = "punishment-incentive"  #  Replace with given channel name for confirming logs (placehold)
 MEETING_INTERVAL_DAYS = 14  # Bi-weekly meetings
 
-# Stores goal logs in memory, replacing with database...
+
+# Data Mngmnt
 LOG_FILE = "goal_logs.json"
 GOALS_FILE = "user_goals.json"
 user_goals = {}  # Holds current goals
+CYCLE_FILE = "cycle_data.json"
+PARTNERS_FILE = "partners.json"
+partners = {} 
 
 def save_user_goals():
     with open(GOALS_FILE, "w") as f:
@@ -55,12 +59,75 @@ def load_goal_logs():
     except FileNotFoundError:
         goal_logs = {}
 
+ # Looooad/save cycle data
+def load_cycle_data():
+    try:
+        with open(CYCLE_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    
+# Progression (cycle)
+
+@bot.command()
+async def cyclestatus(ctx):
+    data = load_cycle_data()
+    if not data:
+        await ctx.send("❌ No cycle is currently active.")
+        return
+
+    start = datetime.strptime(data["start_date"], "%Y-%m-%d")
+    end = datetime.strptime(data["end_date"], "%Y-%m-%d")
+    today = datetime.now()
+
+    days_remaining = (end - today).days
+    current_week = ((today - start).days // 7) + 1
+    current_week = min(current_week, 4)
+
+    next_check_in = "-_- All done!" if days_remaining <= 0 else data["check_ins"][current_week - 1]
+
+    await ctx.send(
+        f"📊 **Cycle Status**\n"
+        f"🗓️ Week: {current_week} of 4\n"
+        f"📅 Days Remaining: {max(0, days_remaining)}\n"
+        f"🛎️ Next Check-In: `{next_check_in}`"
+    )
+
+
+# Daily background task for reminders
+@tasks.loop(hours=24)
+async def daily_cycle_check():
+    data = load_cycle_data()
+    if not data:
+        return
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    last_sent = data.get("last_check_in_sent")
+
+    if today_str in data["check_ins"] and last_sent != today_str:
+        channel = nextcord.utils.get(bot.get_all_channels(), name="general") # Change with a dedicated check in channel???
+        if channel:
+            await channel.send(
+                f"📣 **WEEKLY CHECK-IN REMINDER"
+            )
+        data["last_check_in_sent"] = today_str
+        save_cycle_data(data)
+
+@bot.event
+async def on_ready():
+    daily_cycle_check.start()
+    print(f"Bot is ready and daily check task started.")
+
+def save_cycle_data(data):
+    with open(CYCLE_FILE, "w") as f:
+        json.dump(data, f)
 
 # Bot Events
 @bot.event
 async def on_ready():
     load_goal_logs()
     load_user_goals()
+    load_partners()
     print(f"Logged in as {bot.user}!")
 
 
@@ -73,6 +140,66 @@ async def setgoal(ctx, *, goal_text: str):
     user_goals[str(ctx.author.id)] = goal_text
     save_user_goals()
     await ctx.send(f"✅ {ctx.author.mention}, your goal has been set to:\n> **{goal_text}**")
+
+# partner-goal 
+
+def load_partners():
+    global partners
+    if os.path.exists(PARTNERS_FILE):
+        with open(PARTNERS_FILE, "r") as f:
+            partners = json.load(f)
+
+def save_partners():
+    with open(PARTNERS_FILE, "w") as f:
+        json.dump(partners, f)
+
+@bot.command()
+async def setpartner(ctx, member: nextcord.Member):
+    user_id = str(ctx.author.id)
+    partner_id = str(member.id)
+
+    if user_id == partner_id:
+        await ctx.send(">:( You can't partner with yourself...")
+        return
+
+    # Mutual binding
+    partners[user_id] = partner_id
+    partners[partner_id] = user_id
+    save_partners()
+
+    await ctx.send(f"🤝 {ctx.author.display_name} is now partnered with {member.display_name}!")
+
+# Partner Status Commanding
+
+@bot.command()
+async def partner(ctx):
+    partner_id = partners.get(str(ctx.author.id))
+    if not partner_id:
+        await ctx.send(" >:( You haven't set a partner yet. Use `!setpartner @user`.")
+        return
+
+    partner_user = ctx.guild.get_member(int(partner_id))
+    if partner_user:
+        await ctx.send(f"🤝 Your partner is **{partner_user.display_name}**.")
+    else:
+        await ctx.send("⚠️ Your partner may have left the server...")
+
+
+@bot.command()
+async def partnergoal(ctx):
+    partner_id = partners.get(str(ctx.author.id))
+    if not partner_id:
+        await ctx.send("❌ You don't have a partner set.")
+        return
+
+    partner_goal = user_goals.get(partner_id)
+    if partner_goal:
+        partner_user = ctx.guild.get_member(int(partner_id))
+        name = partner_user.display_name if partner_user else "Your Partner"
+        await ctx.send(f"🎯 **{name}'s goal:**\n> {partner_goal}")
+    else:
+        await ctx.send(" >:( Your partner hasn't set a goal yet.")
+
 
 # Yours or others
 
@@ -170,7 +297,6 @@ async def logs(ctx, member: nextcord.Member = None):
     else:
         await ctx.send(f"📜 Logs for {member.mention}, but no valid timestamps found.")
 
-
 # HEAT
 
 def generate_heatmap_image(timestamps):
@@ -197,6 +323,8 @@ def generate_heatmap_image(timestamps):
     buf.seek(0)
     return buf
 
+
+
 def calculate_streak(timestamps):
     if not timestamps:
         return 0
@@ -220,6 +348,8 @@ async def cayden(ctx): #timeless classic
     await ctx.send("https://cdn.discordapp.com/attachments/1278741106309468242/1372644177065676911/rr.mp4?ex=68278602&is=68263482&hm=a39ab968204763c86fdd8c67e6e359d41dfb5fca983c83e7ee80dd5be704ab22&")
 
 # find better way to !log 
+
+### Cool/useful emojis copypasta ✅🤝📅📊🔥🎯📈💬🛎️🔁📜🧠💪📌⏳👥👣📝🧾⚠️🔐👀🧪
 
 # heatmap/autologging visually
 
