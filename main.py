@@ -12,6 +12,7 @@ import pandas as pd
 import calmap
 import io
 import matplotlib.pyplot as plt 
+import matplotlib.colors as mcolors
 
 
 
@@ -41,23 +42,23 @@ partners = {}
 
 def save_user_goals():
     with open(GOALS_FILE, "w") as f:
-        json.dump(user_goals, f)
+        json.dump({str(k): v for k, v in user_goals.items()}, f)
 
 def load_user_goals():
     global user_goals
     if os.path.exists(GOALS_FILE):
         with open(GOALS_FILE, "r") as f:
-            user_goals = json.load(f)
+            user_goals = {int(k): v for k, v in json.load(f).items()}
 
 
 def load_goal_logs():
     global goal_logs
     try:
         with open(LOG_FILE, "r") as f:
-            goal_logs = json.load(f)
-            # Convert datetime strings if needed later
+            goal_logs = {int(k): v for k, v in json.load(f).items()}
     except FileNotFoundError:
         goal_logs = {}
+
 
  # Looooad/save cycle data
 def load_cycle_data():
@@ -68,6 +69,39 @@ def load_cycle_data():
         return {}
     
 # Progression (cycle)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def startcycle(ctx):
+    data = load_cycle_data()
+
+    if data:
+        await ctx.send("⚠️ A cycle is already active. Use `!cyclestatus` to view it.")
+        return
+
+    # Create a 4-week cycle starting today
+    start_date = datetime.now()
+    end_date = start_date + timedelta(weeks=4)
+
+    check_ins = [
+        (start_date + timedelta(weeks=i)).strftime("%Y-%m-%d")
+        for i in range(4)
+    ]
+
+    cycle_data = {
+        "start_date": start_date.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d"),
+        "check_ins": check_ins,
+        "participants": []
+    }
+
+    save_cycle_data(cycle_data)
+    await ctx.send(
+        f"✅ A new 4-week cycle has started!\n"
+        f"📅 Start: `{cycle_data['start_date']}`\n"
+        f"📅 End: `{cycle_data['end_date']}`\n"
+        f"🔁 Use `!joincycle` to participate."
+    )
 
 @bot.command()
 async def cyclestatus(ctx):
@@ -113,14 +147,45 @@ async def daily_cycle_check():
         data["last_check_in_sent"] = today_str
         save_cycle_data(data)
 
-@bot.event
-async def on_ready():
-    daily_cycle_check.start()
-    print(f"Bot is ready and daily check task started.")
-
 def save_cycle_data(data):
     with open(CYCLE_FILE, "w") as f:
         json.dump(data, f)
+
+@bot.command()
+async def joincycle(ctx):
+    user_id = ctx.author.id
+    data = load_cycle_data()
+
+    if not data:
+        await ctx.send("❌ No active cycle to join.")
+        return
+
+    participants = data.get("participants", [])
+    if user_id in participants:
+        await ctx.send(f"🔁 {ctx.author.display_name}, you're already in this cycle!")
+        return
+
+    participants.append(user_id)
+    data["participants"] = participants
+    save_cycle_data(data)
+
+    await ctx.send(f"✅ {ctx.author.display_name}, you've joined the current cycle! Let's go 💪")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def endcycle(ctx):
+    data = load_cycle_data()
+
+    if not data:
+        await ctx.send("❌ No active cycle to end.")
+        return
+
+    # Wipe cycle data
+    with open(CYCLE_FILE, "w") as f:
+        json.dump({}, f)
+
+    await ctx.send("🔚 The current cycle has been forcefully ended by an admin.")
+
 
 # Bot Events
 @bot.event
@@ -128,7 +193,8 @@ async def on_ready():
     load_goal_logs()
     load_user_goals()
     load_partners()
-    print(f"Logged in as {bot.user}!")
+    daily_cycle_check.start()
+    print(f"Logged in as {bot.user}! Goal logs and cycle check loaded!")
 
 
 
@@ -147,11 +213,11 @@ def load_partners():
     global partners
     if os.path.exists(PARTNERS_FILE):
         with open(PARTNERS_FILE, "r") as f:
-            partners = json.load(f)
+            partners = {int(k): int(v) for k, v in json.load(f).items()}
 
 def save_partners():
     with open(PARTNERS_FILE, "w") as f:
-        json.dump(partners, f)
+        json.dump({str(k): str(v) for k, v in partners.items()}, f)
 
 @bot.command()
 async def setpartner(ctx, member: nextcord.Member):
@@ -216,7 +282,7 @@ async def goal(ctx, member: nextcord.Member = None):
 
 def save_goal_logs():
     with open(LOG_FILE, "w") as f:
-        json.dump(goal_logs, f)
+        json.dump({str(k): v for k, v in goal_logs.items()}, f)
 
 # Tracks which messages have been logged
 logged_messages = set()  # Use message IDs to track completed logs
@@ -303,20 +369,35 @@ def generate_heatmap_image(timestamps):
     if not timestamps:
         return None
 
-    # Set default font
     plt.rcParams['font.family'] = 'DejaVu Sans'
 
-    # Create a Series
-    date_series = pd.Series(1, index=pd.to_datetime(timestamps))
+    # Convert timestamps into a Pandas Series
+    date_series = pd.Series([1] * len(timestamps), index=pd.to_datetime([ts.date() for ts in timestamps]))
+    date_series = date_series.groupby(level=0).sum()  # Aggregate completions per day
+
+    # Create a custom colormap with a gradient from light to dark green
+    cmap = mcolors.LinearSegmentedColormap.from_list("custom_green", ["#e0f2e0", "#b0c475"], N=256)
 
     fig, ax = calmap.calendarplot(
         date_series,
-        cmap='Greens',
-        fillcolor='lightgray',
+        cmap=cmap,
+        fillcolor="#444444",
         linewidth=0.5,
-        fig_kws=dict(figsize=(16, 4))
+        fig_kws=dict(figsize=(16, 4)),
+        vmin=0,
+        vmax=max(1, date_series.max())
     )
 
+    # Set background colors
+    fig.patch.set_facecolor("#333333")
+    if isinstance(ax, dict):
+        for a in ax.values():
+            a.set_facecolor("#333333")
+    else:
+        for a in ax.flat:
+            a.set_facecolor("#333333")
+
+    # Save to buffer
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight")
     plt.close(fig)
@@ -342,6 +423,48 @@ def calculate_streak(timestamps):
             break
     
     return streak
+
+# leaderboard idea
+
+@bot.command()
+async def leaderboard(ctx, top_n: int = 5):
+    if not goal_logs:
+        await ctx.send(" >:( No goal completions logged yet!")
+        return
+
+    sorted_users = sorted(goal_logs.items(), key=lambda x: x[1]["count"], reverse=True)
+    message = "🧠💪 **Top Goal Completers** 💪🧠 \n"
+
+    for i, (user_id, data) in enumerate(sorted_users[:top_n], start=1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"<@{user_id}>"
+        message += f"**#{i}** - {name} → {data['count']} completions\n"
+
+    await ctx.send(message)
+
+# error handling
+
+@bot.event
+async def on_command_error(ctx, error):
+    await ctx.send(f"❌ Error: {str(error)}")
+
+# Help command
+bot.remove_command("help")
+
+@bot.command()
+async def help(ctx):
+    help_text = (
+        "**📘 Commands Help**\n"
+        "🎯 `!setgoal [goal]` - Set your current goal.\n"
+        "👥 `!setpartner @user` - Set your accountability partner.\n"
+        "🧾 `!goal` - View your goal.\n"
+        "🎯 `!partnergoal` - View your partner's goal.\n"
+        "📜 `!logs` - View your log + streak.\n"
+        "🏆 `!leaderboard` - Show top goal completions.\n"
+        "📅 `!cyclestatus` - Check the current cycle progress.\n"
+        "❓ `!help` - View this help message."
+    )
+    await ctx.send(help_text)
 
 @bot.command(hidden=True)
 async def cayden(ctx): #timeless classic
